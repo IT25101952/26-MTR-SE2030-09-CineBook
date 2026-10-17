@@ -2,50 +2,57 @@ import { type ReactNode, useEffect } from 'react';
 import { X } from 'lucide-react';
 
 interface ModalProps {
-  open: boolean;
+  open?: boolean;
+  isOpen?: boolean;
   onClose: () => void;
   title?: string;
   children: ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg';
+  footer?: ReactNode;
 }
 
 const sizes = {
   sm: 'max-w-md',
-  md: 'max-w-lg',
-  lg: 'max-w-2xl',
-  xl: 'max-w-4xl',
+  md: 'max-w-xl',
+  lg: 'max-w-3xl',
 };
 
-export function Modal({ open, onClose, title, children, size = 'md' }: ModalProps) {
-  useEffect(() => {
-    if (open) {
-      document.body.style.overflow = 'hidden';
-      return () => {
-        document.body.style.overflow = '';
-      };
-    }
-  }, [open]);
+export function Modal({ open, isOpen, onClose, title, children, size = 'md', footer }: ModalProps) {
+  const isVisible = open ?? isOpen ?? false;
 
-  if (!open) return null;
+  useEffect(() => {
+    if (isVisible) {
+      document.body.style.overflow = 'hidden';
+      return () => { document.body.style.overflow = ''; };
+    }
+  }, [isVisible]);
+
+  if (!isVisible) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in-fast">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className={`relative w-full ${sizes[size]} glass rounded-2xl shadow-card max-h-[90vh] overflow-y-auto animate-scale-in`}>
+    <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in"
+        onClick={onClose}
+      />
+      <div className={`relative w-full ${sizes[size]} bg-cinema-card hairline rounded-2xl shadow-soft-xl animate-scale-in max-h-[90vh] flex flex-col`}>
         {title && (
-          <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 sticky top-0 bg-ink-900/90 backdrop-blur-xl z-10 rounded-t-2xl">
-            <h3 className="text-lg font-semibold">{title}</h3>
-            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-cinema-border">
+            <h2 className="text-lg font-display font-semibold">{title}</h2>
+            <button
+              onClick={onClose}
+              className="text-text-muted hover:text-text-primary transition-colors p-1 rounded-lg hover:bg-cinema-elevated"
+            >
               <X className="w-5 h-5" />
             </button>
           </div>
         )}
-        {!title && (
-          <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-white/10 transition-colors z-10">
-            <X className="w-5 h-5" />
-          </button>
+        <div className="px-6 py-5 overflow-y-auto flex-1">{children}</div>
+        {footer && (
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-cinema-border">
+            {footer}
+          </div>
         )}
-        <div className="p-6">{children}</div>
       </div>
     </div>
   );

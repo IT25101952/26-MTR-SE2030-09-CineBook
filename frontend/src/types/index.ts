@@ -1,0 +1,223 @@
+export type Role = 'customer' | 'cinemaManager' | 'admin';
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  avatarColor: string;
+  phone?: string;
+  password?: string;
+  authProvider?: 'email' | 'google' | 'microsoft';
+  googleId?: string;
+  profilePicture?: string;
+  isVerified?: boolean;
+  assignedBranchId?: string; // Cinema Manager Branch Scoping (Member 2)
+  loyaltyPoints?: number;     // Customer Loyalty Points (Member 6)
+  loyaltyTier?: 'Bronze' | 'Silver' | 'Gold' | 'Platinum'; // Loyalty Tier (Member 6)
+}
+
+export interface MovieRecommendation {
+  movie: Movie;
+  score: number; // e.g. 96 (%)
+  reason: string;
+}
+
+export interface Movie {
+  id: string;
+  title: string;
+  synopsis: string;
+  poster: string;
+  backdrop: string;
+  genre: string[];
+  language: string;
+  duration: number;
+  rating: number;
+  certification: string;
+  director: string;
+  cast: string[];
+  releaseDate: string;
+  status: 'now-showing' | 'coming-soon';
+  featured: boolean;
+  trailerUrl: string;
+}
+
+export interface CinemaHall {
+  id: string;
+  name: string;
+  rows: number;
+  seatsPerRow: number;
+  premiumRows: number;
+}
+
+export interface Branch {
+  id: string;
+  name: string;
+  city: string;
+  address: string;
+  halls: CinemaHall[];
+}
+
+export interface Showtime {
+  id: string;
+  movieId: string;
+  branchId: string;
+  hallId: string;
+  date: string;
+  time: string;
+  basePrice: number;
+  premiumPrice: number;
+  bookedSeats: string[];
+}
+
+export interface Booking {
+  id: string;
+  bookingRef?: string;
+  tempId?: string;
+  userId: string;
+  movieId: string;
+  movieTitle: string;
+  moviePoster: string;
+  branchId: string;
+  branchName: string;
+  hallName: string;
+  showtimeId: string;
+  date: string;
+  time: string;
+  seats: string[];
+  totalAmount: number;
+  status: 'confirmed' | 'cancelled';
+  refundStatus: 'none' | 'pending' | 'processed';
+  refundAmount?: number;
+  rescheduledFrom?: string;
+  paymentMethod?: string;
+  paymentStatus?: string;
+  bookingDate: string;
+}
+
+export interface ToastMessage {
+  id: string;
+  type: 'success' | 'error' | 'info';
+  message: string;
+}
+
+export type NotificationType =
+  | 'booking_confirmation'
+  | 'cancellation_refund'
+  | 'showtime_reminder'
+  | 'price_alert'
+  | 'system_announcement'
+  | 'content_update'
+  | 'low_availability'
+  | 'new_booking'
+  | 'scheduling_conflict'
+  | 'revenue_milestone'
+  | 'user_registration'
+  | 'review_pending'
+  | 'review_approved'
+  | 'review_rejected';
+
+export type NotificationAudience = 'all' | 'role' | 'branch' | 'loyaltyTier';
+
+export interface LoyaltyVoucher {
+  id: string;
+  userId: string;
+  code: string;
+  title: string;
+  pointsCost: number;
+  redeemedAt: string;
+  expiresAt: string;
+}
+
+export interface Notification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  userId: string;
+  read: boolean;
+  createdAt: string;
+  link?: string;
+  audience?: NotificationAudience;
+  audienceTarget?: string;
+  createdBy?: string;
+  status?: 'sent' | 'read' | 'failed';
+}
+
+export interface NotificationTemplate {
+  id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+}
+
+export interface NotificationPreferences {
+  email: boolean;
+  push: boolean;
+  booking_confirmation: boolean;
+  showtime_reminder: boolean;
+  price_alert: boolean;
+  system_announcement: boolean;
+}
+
+export interface MovieReview {
+  id: string;
+  movieId: string;
+  userId: string;
+  userName: string;
+  rating: number;
+  comment: string;
+  createdAt: string;
+  status: 'approved' | 'pending' | 'rejected';
+}
+
+export interface Promotion {
+  id: string;
+  code: string;
+  description: string;
+  discountType: 'percentage' | 'flat';
+  discountValue: number;
+  minSpend: number;
+  validUntil: string;
+  active: boolean;
+}
+
+export interface SendOtpRequest {
+  target: string;
+  type: 'email' | 'phone';
+}
+
+export interface VerifyOtpRequest {
+  target: string;
+  code: string;
+}
+
+export interface OtpResponse {
+  success: boolean;
+  message: string;
+  demoCode?: string;
+}
+
+export interface RegisterRequest {
+  name: string;
+  email: string;
+  phone?: string;
+  password?: string;
+  authProvider: 'email' | 'google' | 'microsoft';
+  verificationCode?: string;
+}
+
+export interface LoginRequest {
+  email: string;
+  password?: string;
+  authProvider?: 'email' | 'google' | 'microsoft';
+  name?: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: User;
+  message?: string;
+}
+
+

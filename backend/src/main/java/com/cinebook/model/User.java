@@ -17,25 +17,150 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
 public class User {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @com.fasterxml.jackson.annotation.JsonProperty("id")
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    @com.fasterxml.jackson.annotation.JsonSetter("id")
+    public void setJsonId(Object rawId) {
+        if (rawId == null) {
+            this.id = null;
+        } else if (rawId instanceof Number number) {
+            this.id = number.longValue();
+        } else {
+            String s = rawId.toString().trim();
+            if (s.isEmpty() || !s.matches("\\d+")) {
+                this.id = null;
+            } else {
+                this.id = Long.parseLong(s);
+            }
+        }
+    }
+
     @Column(nullable = false)
     private String fullName;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("name")
+    public String getName() {
+        return fullName;
+    }
+
+    @com.fasterxml.jackson.annotation.JsonProperty("name")
+    public void setName(String name) {
+        if (name != null) {
+            this.fullName = name;
+        }
+    }
 
     @Column(nullable = false, unique = true)
     private String email;
 
-    @Column(nullable = false)
-    private String password; // store as a hash (e.g. BCrypt) — never plain text
+    @Column(nullable = true)
+    private String password;
+
+    @Column(name = "google_id", unique = true, nullable = true)
+    @com.fasterxml.jackson.annotation.JsonProperty("googleId")
+    private String googleId;
+
+    @Column(name = "profile_picture", nullable = true, length = 1000)
+    @com.fasterxml.jackson.annotation.JsonProperty("profilePicture")
+    private String profilePicture;
+
+    private String phone;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("phoneNumber")
+    public String getPhoneNumber() {
+        return phone;
+    }
+
+    @com.fasterxml.jackson.annotation.JsonProperty("phoneNumber")
+    public void setPhoneNumber(String phoneNumber) {
+        if (phoneNumber != null) {
+            this.phone = phoneNumber;
+        }
+    }
+
+    @Column(name = "auth_provider")
+    @com.fasterxml.jackson.annotation.JsonProperty("authProvider")
+    private String authProvider = "LOCAL";
+
+    public String getAuthProvider() {
+        if (authProvider == null || "EMAIL".equalsIgnoreCase(authProvider)) {
+            return "LOCAL";
+        }
+        return authProvider;
+    }
+
+    public void setAuthProvider(String authProvider) {
+        if (authProvider == null || "EMAIL".equalsIgnoreCase(authProvider) || "LOCAL".equalsIgnoreCase(authProvider)) {
+            this.authProvider = "LOCAL";
+        } else {
+            this.authProvider = authProvider.toUpperCase();
+        }
+    }
+
+    @Transient
+    @com.fasterxml.jackson.annotation.JsonProperty("isVerified")
+    private Boolean isVerified;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private Role role;
+    private Role role = Role.CUSTOMER;
 
     // Cinema Managers are scoped to a branch; null for Admin/Customer.
     private Long branchId;
+
+    @Column(name = "loyalty_points")
+    private Integer loyaltyPoints = 0;
+
+    @Column(name = "membership_tier")
+    private String membershipTier = "Bronze";
+
+    @com.fasterxml.jackson.annotation.JsonProperty("loyaltyTier")
+    public String getLoyaltyTier() {
+        return membershipTier;
+    }
+
+    @com.fasterxml.jackson.annotation.JsonProperty("loyaltyTier")
+    public void setLoyaltyTier(String loyaltyTier) {
+        if (loyaltyTier != null) {
+            this.membershipTier = loyaltyTier;
+        }
+    }
+
+    @Column(name = "avatar_color")
+    private String avatarColor = "#F5C518";
+
+    @com.fasterxml.jackson.annotation.JsonProperty("assignedBranchId")
+    public String getAssignedBranchId() {
+        return branchId != null ? branchId.toString() : null;
+    }
+
+    @com.fasterxml.jackson.annotation.JsonProperty("assignedBranchId")
+    public void setAssignedBranchId(Object bId) {
+        if (bId == null) {
+            this.branchId = null;
+        } else if (bId instanceof Number number) {
+            this.branchId = number.longValue();
+        } else {
+            String s = bId.toString().trim();
+            if (s.isEmpty() || !s.matches("\\d+")) {
+                this.branchId = null;
+            } else {
+                this.branchId = Long.parseLong(s);
+            }
+        }
+    }
 }

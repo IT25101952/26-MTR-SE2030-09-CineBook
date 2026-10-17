@@ -1,113 +1,288 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Search, SlidersHorizontal, Film } from 'lucide-react';
-import { store } from '@/data/store';
-import type { Movie } from '@/types';
-import { MovieCard } from '@/components/MovieCard';
+import { useMemo, useState } from 'react';
+import { useSearchParams, Navigate, Link } from 'react-router-dom';
+import { Search, SlidersHorizontal, MapPin, Sparkles, CalendarDays, RotateCcw, Bookmark } from 'lucide-react';
+import { getMovies, getBranches, getShowtimes, isMovieWishlisted, STORE_EVENTS } from '@/data/store';
+import { useStoreSync } from '@/hooks/useStoreSync';
+import { useAuth } from '@/contexts/AuthContext';
+import { MovieCard } from '@/components/movies/MovieCard';
 import { Select } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
 
 export function MoviesPage() {
-  const [movies, setMovies] = useState<Movie[]>([]);
+  const { user } = useAuth();
+
+  if (user?.role === 'cinemaManager' || user?.role === 'admin') {
+    return <Navigate to="/manage/movies" replace />;
+  }
+
+  const storeTick = useStoreSync([STORE_EVENTS.movies, STORE_EVENTS.branches, STORE_EVENTS.showtimes, STORE_EVENTS.wishlist]);
+
   const [searchParams, setSearchParams] = useSearchParams();
-  const [query, setQuery] = useState(searchParams.get('q') ?? '');
-  const [genre, setGenre] = useState('all');
-  const [language, setLanguage] = useState('all');
-  const [status, setStatus] = useState(searchParams.get('status') ?? 'all');
-  const [sortBy, setSortBy] = useState('rating');
+  const allMovies = useMemo(() => getMovies(), [storeTick]);
+  const branches = useMemo(() => getBranches(), [storeTick]);
+  const showtimes = useMemo(() => getShowtimes(), [storeTick]);
 
-  useEffect(() => {
-    setMovies(store.getMovies());
-  }, []);
+  const [search, setSearch] = useState('');
+  const statusFilter = searchParams.get('filter') || 'all';
+  const [genreFilter, setGenreFilter] = useState('all');
+  const [languageFilter, setLanguageFilter] = useState('all');
+  const [branchFilter, setBranchFilter] = useState('all');
+  const [formatFilter, setFormatFilter] = useState('all');
+  const [dateRangeFilter, setDateRangeFilter] = useState('all');
 
-  const allGenres = useMemo(() => Array.from(new Set(movies.flatMap((m) => m.genres))).sort(), [movies]);
-  const allLanguages = useMemo(() => Array.from(new Set(movies.map((m) => m.language))).sort(), [movies]);
+  const genres = useMemo(() => {
+    const set = new Set<string>();
+    allMovies.forEach(m => m.genre.forEach(g => set.add(g)));
+    return Array.from(set).sort();
+  }, [allMovies]);
+
+  const languages = useMemo(() => {
+    return Array.from(new Set(allMovies.map(m => m.language))).sort();
+  }, [allMovies]);
 
   const filtered = useMemo(() => {
-    let result = movies;
-    if (query) {
-      const q = query.toLowerCase();
-      result = result.filter((m) => m.title.toLowerCase().includes(q) || m.cast.some((c) => c.toLowerCase().includes(q)) || m.director.toLowerCase().includes(q));
-    }
-    if (genre !== 'all') result = result.filter((m) => m.genres.includes(genre));
-    if (language !== 'all') result = result.filter((m) => m.language === language);
-    if (status !== 'all') result = result.filter((m) => m.status === status);
+    return allMovies.filter(m => {
+      if (statusFilter === 'wishlist') {
+        if (!user || !isMovieWishlisted(user.id, m.id)) return false;
+      } else if (statusFilter !== 'all' && m.status !== statusFilter) {
+        return false;
+      }
+      if (genreFilter !== 'all' && !m.genre.includes(genreFilter)) return false;
+      if (languageFilter !== 'all' && m.language !== languageFilter) return false;
+      if (search && !m.title.toLowerCase().includes(search.toLowerCase())) return false;
 
-    result = [...result].sort((a, b) => {
-      if (sortBy === 'rating') return b.rating - a.rating;
-      if (sortBy === 'title') return a.title.localeCompare(b.title);
-      if (sortBy === 'release') return new Date(a.releaseDate).getTime() - new Date(b.releaseDate).getTime();
-      return 0;
+      // Filter by Cinema Branch
+      if (branchFilter !== 'all') {
+        const hasShowtimeInBranch = showtimes.some(s => s.movieId === m.id && s.branchId === branchFilter);
+        if (!hasShowtimeInBranch) return false;
+      }
+
+      // Filter by Screening Format (2D, 3D, IMAX, 4DX)
+      if (formatFilter !== 'all') {
+        if (formatFilter === 'IMAX') {
+          const isImax = m.title.includes('Dune') || m.title.includes('Oppenheimer') || m.title.includes('Interstellar');
+          if (!isImax) return false;
+        } else if (formatFilter === '3D') {
+          const is3d = m.genre.includes('Action') || m.genre.includes('Sci-Fi') || m.title.includes('Spider-Man');
+          if (!is3d) return false;
+        } else if (formatFilter === '4DX') {
+          const is4dx = m.genre.includes('Action') || m.title.includes('Apes') || m.title.includes('Furiosa');
+          if (!is4dx) return false;
+        }
+      }
+
+      // Filter by Release Date Range
+      if (dateRangeFilter !== 'all') {
+        const releaseYear = new Date(m.releaseDate).getFullYear();
+        const currentYear = new Date().getFullYear();
+        if (dateRangeFilter === 'this-year' && releaseYear !== currentYear) return false;
+        if (dateRangeFilter === 'classic' && releaseYear >= currentYear) return false;
+      }
+
+      return true;
     });
-    return result;
-  }, [movies, query, genre, language, status, sortBy]);
+  }, [allMovies, statusFilter, genreFilter, languageFilter, branchFilter, formatFilter, dateRangeFilter, search, showtimes, user]);
 
-  const updateQuery = (v: string) => {
-    setQuery(v);
-    setSearchParams(v ? { q: v } : {});
+  const setStatusFilter = (val: string) => {
+    if (val === 'all') {
+      searchParams.delete('filter');
+    } else {
+      searchParams.set('filter', val);
+    }
+    setSearchParams(searchParams);
   };
 
+  const clearFilters = () => {
+    setSearch('');
+    setGenreFilter('all');
+    setLanguageFilter('all');
+    setBranchFilter('all');
+    setFormatFilter('all');
+    setDateRangeFilter('all');
+    setSearchParams({});
+  };
+
+  const hasActiveFilters = search || statusFilter !== 'all' || genreFilter !== 'all' || languageFilter !== 'all' || branchFilter !== 'all' || formatFilter !== 'all' || dateRangeFilter !== 'all';
+
   return (
-    <div className="container-app py-8">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Browse Movies</h1>
-        <p className="text-ink-400">Discover what's showing and what's coming to a cinema near you.</p>
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+      <div className="mb-8 animate-fade-in">
+        <h1 className="text-4xl font-display font-bold mb-2">Browse Movies</h1>
+        <p className="text-text-secondary">Discover what's playing and coming soon across CineBook cinema branches</p>
       </div>
 
-      {/* Search bar */}
-      <div className="relative mb-6">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-ink-400" />
-        <input
-          value={query}
-          onChange={(e) => updateQuery(e.target.value)}
-          placeholder="Search by title, cast, or director..."
-          className="w-full bg-ink-850 border border-ink-600 rounded-xl pl-12 pr-4 py-3 text-sm focus:outline-none focus:border-accent transition-colors"
-        />
+      {/* Quick Category / Status Tabs */}
+      <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-2 scrollbar-none">
+        <button
+          type="button"
+          onClick={() => setStatusFilter('all')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+            statusFilter === 'all'
+              ? 'bg-accent-primary text-white shadow-lg shadow-accent-primary/25'
+              : 'bg-cinema-card text-text-secondary hover:text-text-primary hover:bg-cinema-elevated hairline'
+          }`}
+        >
+          All Movies
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusFilter('now-showing')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+            statusFilter === 'now-showing'
+              ? 'bg-accent-primary text-white shadow-lg shadow-accent-primary/25'
+              : 'bg-cinema-card text-text-secondary hover:text-text-primary hover:bg-cinema-elevated hairline'
+          }`}
+        >
+          Now Showing
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusFilter('coming-soon')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+            statusFilter === 'coming-soon'
+              ? 'bg-accent-primary text-white shadow-lg shadow-accent-primary/25'
+              : 'bg-cinema-card text-text-secondary hover:text-text-primary hover:bg-cinema-elevated hairline'
+          }`}
+        >
+          Coming Soon
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusFilter('wishlist')}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+            statusFilter === 'wishlist'
+              ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/25'
+              : 'bg-cinema-card text-text-secondary hover:text-amber-500 hover:bg-cinema-elevated hairline'
+          }`}
+        >
+          <Bookmark className="w-3.5 h-3.5" /> My Wishlist
+        </button>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3 mb-8">
-        <div className="flex items-center gap-2 text-sm text-ink-400 mr-2">
-          <SlidersHorizontal className="w-4 h-4" /> Filters:
-        </div>
-        <div className="w-40">
-          <Select value={genre} onChange={(e) => setGenre(e.target.value)}>
+      {/* Filter Bar */}
+      <div className="bg-cinema-card hairline rounded-2xl p-4 sm:p-5 mb-8 animate-fade-in-up">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+            <input
+              type="text"
+              placeholder="Search by movie title..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full bg-cinema-base border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary/50 transition-all"
+            />
+          </div>
+          <Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+            <option value="all">All Release Status</option>
+            <option value="now-showing">Now Showing</option>
+            <option value="coming-soon">Coming Soon</option>
+            <option value="wishlist">Saved in Wishlist ⭐</option>
+          </Select>
+          <Select value={genreFilter} onChange={e => setGenreFilter(e.target.value)}>
             <option value="all">All Genres</option>
-            {allGenres.map((g) => <option key={g} value={g}>{g}</option>)}
+            {genres.map(g => <option key={g} value={g}>{g}</option>)}
           </Select>
-        </div>
-        <div className="w-36">
-          <Select value={language} onChange={(e) => setLanguage(e.target.value)}>
+          <Select value={languageFilter} onChange={e => setLanguageFilter(e.target.value)}>
             <option value="all">All Languages</option>
-            {allLanguages.map((l) => <option key={l} value={l}>{l}</option>)}
+            {languages.map(l => <option key={l} value={l}>{l}</option>)}
           </Select>
         </div>
-        <div className="w-40">
-          <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="all">All Status</option>
-            <option value="now_showing">Now Showing</option>
-            <option value="coming_soon">Coming Soon</option>
-          </Select>
-        </div>
-        <div className="w-36">
-          <Select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-            <option value="rating">Sort: Rating</option>
-            <option value="title">Sort: Title A-Z</option>
-            <option value="release">Sort: Release Date</option>
-          </Select>
+
+        {/* Multi-attribute secondary filters */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3 border-t border-white/5">
+          <div className="flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-text-muted flex-shrink-0" />
+            <Select value={branchFilter} onChange={e => setBranchFilter(e.target.value)}>
+              <option value="all">All Cinema Branches</option>
+              {branches.map(b => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-text-muted flex-shrink-0" />
+            <Select value={formatFilter} onChange={e => setFormatFilter(e.target.value)}>
+              <option value="all">All Screening Formats</option>
+              <option value="2D">Standard 2D</option>
+              <option value="3D">Digital 3D</option>
+              <option value="IMAX">IMAX Experience</option>
+              <option value="4DX">4DX Motion & Effects</option>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <CalendarDays className="w-4 h-4 text-text-muted flex-shrink-0" />
+            <Select value={dateRangeFilter} onChange={e => setDateRangeFilter(e.target.value)}>
+              <option value="all">All Release Dates</option>
+              <option value="this-year">Released This Year</option>
+              <option value="classic">Past Releases</option>
+            </Select>
+          </div>
         </div>
       </div>
 
-      {/* Results */}
-      <div className="mb-4 text-sm text-ink-400">{filtered.length} movie{filtered.length !== 1 ? 's' : ''} found</div>
-      {filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <Film className="w-16 h-16 text-ink-600 mb-4" />
-          <h3 className="text-lg font-semibold mb-1">No movies found</h3>
-          <p className="text-ink-400">Try adjusting your search or filters.</p>
+      <div className="flex items-center justify-between gap-2 mb-5 text-sm text-text-secondary flex-wrap">
+        <div className="flex items-center gap-2">
+          <SlidersHorizontal className="w-4 h-4" />
+          <span>{filtered.length} {filtered.length === 1 ? 'movie' : 'movies'} found</span>
+        </div>
+        {hasActiveFilters && (
+          <button
+            onClick={clearFilters}
+            className="flex items-center gap-1.5 text-xs text-accent-primary hover:underline"
+          >
+            <RotateCcw className="w-3 h-3" /> Reset all filters
+          </button>
+        )}
+      </div>
+
+      {statusFilter === 'wishlist' && !user ? (
+        <div className="text-center py-16 bg-cinema-card hairline rounded-2xl max-w-md mx-auto p-8 shadow-xl animate-fade-in">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500">
+            <Bookmark className="w-7 h-7" />
+          </div>
+          <h2 className="text-xl font-display font-semibold mb-2">Sign in to view your Wishlist</h2>
+          <p className="text-text-secondary text-sm mb-6 leading-relaxed">
+            Your wishlist is saved to your account in our database so you can keep track of films and receive alerts across all your devices.
+          </p>
+          <Link to="/login">
+            <Button size="lg" className="w-full">
+              Sign In or Register
+            </Button>
+          </Link>
+        </div>
+      ) : filtered.length > 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-5">
+          {filtered.map((movie, i) => (
+            <MovieCard key={movie.id} movie={movie} index={i} />
+          ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
-          {filtered.map((m, i) => <MovieCard key={m.id} movie={m} index={i} />)}
+        <div className="text-center py-20 bg-cinema-card hairline rounded-2xl">
+          {statusFilter === 'wishlist' ? (
+            <>
+              <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-500">
+                <Bookmark className="w-6 h-6" />
+              </div>
+              <p className="text-text-primary font-medium text-lg mb-1">Your wishlist is empty</p>
+              <p className="text-text-muted text-sm mb-4">Click the bookmark icon on any movie to save it to your wishlist.</p>
+              <button
+                onClick={() => setStatusFilter('all')}
+                className="text-accent-primary text-sm font-semibold hover:underline"
+              >
+                Browse All Movies
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="text-text-muted text-lg mb-2">No movies match your selected filters.</p>
+              <button
+                onClick={clearFilters}
+                className="mt-2 text-accent-primary text-sm hover:underline"
+              >
+                Clear all filters
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

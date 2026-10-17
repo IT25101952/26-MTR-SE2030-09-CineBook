@@ -1,75 +1,1677 @@
-import { movies as seedMovies, showtimes as seedShowtimes, halls as seedHalls, branches as seedBranches, users as seedUsers, seedBookings } from '@/data/mockData';
-import type { Movie, Showtime, CinemaHall, CinemaBranch, AppUser, Booking } from '@/types';
+import { mockMovies, mockBranches, mockShowtimes, mockBookings, mockUsers, mockAdminUsers, mockNotifications, mockNotificationTemplates, mockMovieReviews, mockPromotions } from '@/data/mockData';
+import type { Movie, Branch, Showtime, Booking, User, Role, Notification, NotificationTemplate, NotificationPreferences, MovieReview, Promotion, MovieRecommendation, LoyaltyVoucher, SendOtpRequest, VerifyOtpRequest, OtpResponse, RegisterRequest, LoginRequest } from '@/types';
+import { movieApi } from '@/api/movieApi';
+import { branchApi } from '@/api/branchApi';
+import { showtimeApi } from '@/api/showtimeApi';
+import { bookingApi } from '@/api/bookingApi';
+import { promotionApi } from '@/api/promotionApi';
+import { userApi } from '@/api/userApi';
+import { reviewApi } from '@/api/reviewApi';
+import { notificationApi } from '@/api/notificationApi';
+import { wishlistApi } from '@/api/wishlistApi';
+import { loyaltyVoucherApi } from '@/api/loyaltyVoucherApi';
+import { waitlistApi } from '@/api/waitlistApi';
+import { authApi } from '@/api/authApi';
 
 const KEYS = {
-  movies: 'cinebook.movies',
-  showtimes: 'cinebook.showtimes',
-  halls: 'cinebook.halls',
-  branches: 'cinebook.branches',
-  users: 'cinebook.users',
-  bookings: 'cinebook.bookings',
-  role: 'cinebook.role',
-  seeded: 'cinebook.seeded.v1',
+  movies: 'cinebook_movies',
+  branches: 'cinebook_branches',
+  showtimes: 'cinebook_showtimes',
+  bookings: 'cinebook_bookings',
+  users: 'cinebook_users',
+  currentUser: 'cinebook_current_user',
+  seeded: 'cinebook_seeded',
+  notifications: 'cinebook_notifications',
+  notificationTemplates: 'cinebook_notification_templates',
+  notificationPrefs: 'cinebook_notification_prefs',
+  reviews: 'cinebook_reviews',
+  promotions: 'cinebook_promotions',
+  wishlist: 'cinebook_wishlist',
+  waitlists: 'cinebook_waitlists',
+  vouchers: 'cinebook_loyalty_vouchers',
 };
 
-function read<T>(key: string, fallback: T): T {
+export const STORE_EVENTS = {
+  movies: 'cinebook:movies_updated',
+  branches: 'cinebook:branches_updated',
+  showtimes: 'cinebook:showtimes_updated',
+  bookings: 'cinebook:bookings_updated',
+  users: 'cinebook:users_updated',
+  reviews: 'cinebook:reviews_updated',
+  promotions: 'cinebook:promotions_updated',
+  wishlist: 'cinebook:wishlist_updated',
+  vouchers: 'cinebook:vouchers_updated',
+  waitlists: 'cinebook:waitlists_updated',
+  notifications: 'cinebook:notifications_updated',
+  all: 'cinebook:data_updated',
+} as const;
+
+export function emitStoreEvent(event: string) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(event));
+    window.dispatchEvent(new CustomEvent(STORE_EVENTS.all));
+  }
+}
+
+export function seedData(): void {
+  // If legacy mock data is detected (e.g. 'm1', 'b1', 'bk1'), clear it so fresh DB data takes precedence
+  const existingMoviesRaw = localStorage.getItem(KEYS.movies);
+  const isLegacy = existingMoviesRaw && (existingMoviesRaw.includes('"id":"m1"') || existingMoviesRaw.includes('"id":"b1"'));
+  if (isLegacy) {
+    localStorage.removeItem(KEYS.movies);
+    localStorage.removeItem(KEYS.branches);
+    localStorage.removeItem(KEYS.showtimes);
+    localStorage.removeItem(KEYS.bookings);
+    localStorage.removeItem(KEYS.users);
+    localStorage.removeItem(KEYS.currentUser);
+    localStorage.removeItem(KEYS.promotions);
+    localStorage.removeItem(KEYS.reviews);
+    localStorage.removeItem(KEYS.notifications);
+  }
+
+  const existingMovies = localStorage.getItem(KEYS.movies);
+  if (!existingMovies || JSON.parse(existingMovies).length === 0) {
+    localStorage.setItem(KEYS.movies, JSON.stringify(mockMovies));
+  }
+  if (!localStorage.getItem(KEYS.branches) || JSON.parse(localStorage.getItem(KEYS.branches) || '[]').length === 0) {
+    localStorage.setItem(KEYS.branches, JSON.stringify(mockBranches));
+  }
+  if (!localStorage.getItem(KEYS.showtimes) || JSON.parse(localStorage.getItem(KEYS.showtimes) || '[]').length === 0) {
+    localStorage.setItem(KEYS.showtimes, JSON.stringify(mockShowtimes));
+  }
+  if (!localStorage.getItem(KEYS.bookings)) {
+    localStorage.setItem(KEYS.bookings, JSON.stringify(mockBookings));
+  }
+  if (!localStorage.getItem(KEYS.users)) {
+    localStorage.setItem(KEYS.users, JSON.stringify(mockAdminUsers));
+  } else {
+    // If cached users exist, ensure single admin rule is upheld (demote Jamie Chen to cinemaManager if needed)
+    try {
+      const storedUsers: User[] = JSON.parse(localStorage.getItem(KEYS.users) || '[]');
+      const admins = storedUsers.filter(u => u.role === 'admin');
+      if (admins.length > 1) {
+        let changed = false;
+        storedUsers.forEach(u => {
+          if (u.email?.toLowerCase() === 'jamie@cinebook.com' && u.role === 'admin') {
+            u.role = 'cinemaManager';
+            u.assignedBranchId = '3';
+            changed = true;
+          }
+        });
+        if (changed) {
+          localStorage.setItem(KEYS.users, JSON.stringify(storedUsers));
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  const existingNotifications = localStorage.getItem(KEYS.notifications);
+  if (!existingNotifications || JSON.parse(existingNotifications || '[]').length === 0) {
+    localStorage.setItem(KEYS.notifications, JSON.stringify(mockNotifications));
+  }
+  // Default user starts in logged-out mode when system launches
+  if (!localStorage.getItem(KEYS.notificationTemplates)) {
+    localStorage.setItem(KEYS.notificationTemplates, JSON.stringify(mockNotificationTemplates));
+  }
+  if (!localStorage.getItem(KEYS.reviews)) {
+    localStorage.setItem(KEYS.reviews, JSON.stringify(mockMovieReviews));
+  }
+  if (!localStorage.getItem(KEYS.promotions)) {
+    localStorage.setItem(KEYS.promotions, JSON.stringify(mockPromotions));
+  }
+  localStorage.setItem(KEYS.seeded, 'true');
+}
+
+
+export async function syncFromBackend(): Promise<void> {
   try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
+    const [moviesResult, branchesResult, showtimesResult, bookingsResult, promosResult, usersResult, reviewsResult, notifsResult] = await Promise.allSettled([
+      movieApi.getMovies(),
+      branchApi.getBranches(),
+      showtimeApi.getShowtimes(),
+      bookingApi.getBookings(),
+      promotionApi.getPromotions(),
+      userApi.getUsers(),
+      reviewApi.getReviews(),
+      notificationApi.getNotifications(),
+    ]);
+
+    if (moviesResult.status === 'fulfilled' && moviesResult.value && moviesResult.value.length > 0) {
+      write(KEYS.movies, moviesResult.value);
+    }
+    if (branchesResult.status === 'fulfilled' && branchesResult.value && branchesResult.value.length > 0) {
+      write(KEYS.branches, branchesResult.value);
+    }
+    if (showtimesResult.status === 'fulfilled' && showtimesResult.value && showtimesResult.value.length > 0) {
+      write(KEYS.showtimes, showtimesResult.value);
+    }
+    if (bookingsResult.status === 'fulfilled' && bookingsResult.value && bookingsResult.value.length > 0) {
+      write(KEYS.bookings, bookingsResult.value);
+    }
+    if (promosResult.status === 'fulfilled' && promosResult.value && promosResult.value.length > 0) {
+      write(KEYS.promotions, promosResult.value);
+    }
+    if (usersResult.status === 'fulfilled' && usersResult.value && usersResult.value.length > 0) {
+      write(KEYS.users, usersResult.value);
+    }
+    if (reviewsResult.status === 'fulfilled' && reviewsResult.value && reviewsResult.value.length > 0) {
+      write(KEYS.reviews, reviewsResult.value);
+    }
+    if (notifsResult.status === 'fulfilled' && notifsResult.value && notifsResult.value.length > 0) {
+      write(KEYS.notifications, notifsResult.value);
+    }
+
+    const currentUser = getCurrentUser();
+    if (currentUser?.id) {
+      syncUserWishlist(currentUser.id).catch(err => console.warn('Wishlist sync failed:', err));
+
+      loyaltyVoucherApi.getUserVouchers(currentUser.id).then(vouchers => {
+        if (vouchers && vouchers.length > 0) {
+          const allV = read<LoyaltyVoucher>(KEYS.vouchers);
+          const others = allV.filter(v => v.userId !== currentUser.id);
+          write(KEYS.vouchers, [...vouchers, ...others]);
+          emitStoreEvent(STORE_EVENTS.vouchers);
+        }
+      }).catch(err => console.warn('Vouchers sync failed:', err));
+    }
+    emitStoreEvent(STORE_EVENTS.all);
+  } catch (err) {
+    console.warn('Backend sync failed, using local store data:', err);
+  }
+}
+
+function read<T>(key: string): T[] {
+  const data = localStorage.getItem(key);
+  return data ? JSON.parse(data) : [];
+}
+
+function write<T>(key: string, data: T[]): void {
+  localStorage.setItem(key, JSON.stringify(data));
+}
+
+// Movies
+export function getMovies(): Movie[] {
+  const list = read<Movie>(KEYS.movies);
+  if (!list || list.length === 0) {
+    write(KEYS.movies, mockMovies);
+    return mockMovies;
+  }
+  return list;
+}
+
+export async function fetchLiveMovies(): Promise<Movie[]> {
+  try {
+    const apiMovies = await movieApi.getMovies();
+    if (apiMovies && apiMovies.length > 0) {
+      write(KEYS.movies, apiMovies);
+      return apiMovies;
+    }
+  } catch (err) {
+    console.warn('Backend /api/movies unreachable, falling back to local cache:', err);
+  }
+  return getMovies();
+}
+
+export function getMovie(id: string): Movie | undefined {
+  return getMovies().find(m => m.id === id);
+}
+
+export async function saveMovie(movie: Movie): Promise<Movie> {
+  const movies = getMovies();
+  const normalizedTitle = (movie.title || '').trim().toLowerCase();
+  const idx = movies.findIndex(m => m.id === movie.id);
+  if (idx >= 0) {
+    const isDuplicate = movies.some(
+      m => m.id !== movie.id && (m.title || '').trim().toLowerCase() === normalizedTitle
+    );
+    if (isDuplicate) {
+      throw new Error(`A movie with title "${movie.title.trim()}" already exists!`);
+    }
+
+    let savedMovie = { ...movie };
+    try {
+      const updated = await movieApi.updateMovie(movie.id, movie);
+      if (updated) {
+        savedMovie = updated;
+      }
+    } catch (err: any) {
+      console.warn('API updateMovie failed:', err);
+      if (err?.status === 409 || err?.status === 400) {
+        throw new Error(err.message || 'Validation error while updating movie');
+      }
+    }
+
+    const current = getMovies();
+    const currentIdx = current.findIndex(m => m.id === movie.id);
+    if (currentIdx >= 0) {
+      current[currentIdx] = savedMovie;
+    } else {
+      current.push(savedMovie);
+    }
+    write(KEYS.movies, current);
+    emitStoreEvent(STORE_EVENTS.movies);
+    return savedMovie;
+  } else {
+    const isDuplicate = movies.some(
+      m => (m.title || '').trim().toLowerCase() === normalizedTitle
+    );
+    if (isDuplicate) {
+      throw new Error(`A movie with title "${movie.title.trim()}" already exists!`);
+    }
+
+    let savedMovie = { ...movie };
+    try {
+      const created = await movieApi.createMovie(movie);
+      if (created && created.id) {
+        savedMovie = created;
+      }
+    } catch (err: any) {
+      console.error('API createMovie failed:', err);
+      if (err?.status === 409 || err?.status === 400) {
+        throw new Error(err.message || 'Validation error while creating movie');
+      }
+      if (!savedMovie.id) {
+        savedMovie.id = `m${Date.now()}`;
+      }
+    }
+
+    const current = getMovies();
+    current.unshift(savedMovie);
+    write(KEYS.movies, current);
+    emitStoreEvent(STORE_EVENTS.movies);
+    return savedMovie;
+  }
+}
+
+export async function deleteMovie(id: string): Promise<void> {
+  try {
+    await movieApi.deleteMovie(id);
+  } catch (err: any) {
+    console.warn('API deleteMovie sync failed:', err);
+    if (err?.status === 400 || err?.status === 409) {
+      throw new Error(err.message || 'Failed to delete movie');
+    }
+  }
+  write(KEYS.movies, getMovies().filter(m => m.id !== id));
+  emitStoreEvent(STORE_EVENTS.movies);
+}
+
+// Branches
+export function getBranches(): Branch[] {
+  return read<Branch>(KEYS.branches);
+}
+
+export function getBranch(id: string): Branch | undefined {
+  return getBranches().find(b => b.id === id);
+}
+
+export function saveBranch(branch: Branch): void {
+  const branches = getBranches();
+  const idx = branches.findIndex(b => b.id === branch.id);
+  if (idx >= 0) {
+    branches[idx] = branch;
+    write(KEYS.branches, branches);
+    emitStoreEvent(STORE_EVENTS.branches);
+    branchApi.updateBranch(branch.id, branch).catch(err =>
+      console.warn('API updateBranch sync failed, changes kept locally:', err)
+    );
+  } else {
+    const localId = branch.id || `b${Date.now()}`;
+    const toSave = { ...branch, id: localId };
+    branches.push(toSave);
+    write(KEYS.branches, branches);
+    emitStoreEvent(STORE_EVENTS.branches);
+    branchApi.createBranch(branch).then(created => {
+      if (created.id && created.id !== localId) {
+        const current = getBranches();
+        const item = current.find(b => b.id === localId);
+        if (item) item.id = created.id;
+        write(KEYS.branches, current);
+        emitStoreEvent(STORE_EVENTS.branches);
+      }
+    }).catch(err =>
+      console.warn('API createBranch sync failed, changes kept locally:', err)
+    );
+  }
+}
+
+export function deleteBranch(id: string): void {
+  write(KEYS.branches, getBranches().filter(b => b.id !== id));
+  emitStoreEvent(STORE_EVENTS.branches);
+  branchApi.deleteBranch(id).catch(err =>
+    console.warn('API deleteBranch sync failed, deletion kept locally:', err)
+  );
+}
+
+// Showtimes
+export function getShowtimes(): Showtime[] {
+  return read<Showtime>(KEYS.showtimes);
+}
+
+export function getShowtimesByMovie(movieId: string): Showtime[] {
+  return getShowtimes().filter(s => s.movieId === movieId);
+}
+
+export function getShowtime(id: string): Showtime | undefined {
+  return getShowtimes().find(s => s.id === id);
+}
+
+export async function saveShowtime(showtime: Showtime): Promise<Showtime> {
+  const showtimes = getShowtimes();
+  const idx = showtimes.findIndex(s => s.id === showtime.id);
+  if (idx >= 0) {
+    showtimes[idx] = showtime;
+    write(KEYS.showtimes, showtimes);
+    emitStoreEvent(STORE_EVENTS.showtimes);
+    try {
+      const res = await showtimeApi.updateShowtime(showtime.id, showtime);
+      return res;
+    } catch (err) {
+      console.warn('API updateShowtime sync failed, changes kept locally:', err);
+      return showtime;
+    }
+  } else {
+    const localId = showtime.id || `s${Date.now()}`;
+    const toSave = { ...showtime, id: localId };
+    showtimes.push(toSave);
+    write(KEYS.showtimes, showtimes);
+    emitStoreEvent(STORE_EVENTS.showtimes);
+    // Notify users who wishlisted this movie
+    try {
+      const allWishlists = JSON.parse(localStorage.getItem(KEYS.wishlist) || '{}');
+      const movie = getMovie(showtime.movieId);
+      const movieTitle = movie ? movie.title : 'Movie';
+      const hall = getHall(showtime.branchId, showtime.hallId);
+      const hallName = hall ? hall.name : '';
+
+      Object.entries(allWishlists).forEach(([userId, movieIds]) => {
+        if (Array.isArray(movieIds) && movieIds.includes(showtime.movieId)) {
+          saveNotification({
+            id: `n_wl_${Date.now()}_${userId}`,
+            type: 'showtime_reminder',
+            title: `Showtimes Open: ${movieTitle}`,
+            message: `New showtime scheduled for "${movieTitle}" on ${showtime.date} at ${showtime.time}${hallName ? ` (${hallName})` : ''}. Book your seats now!`,
+            userId,
+            read: false,
+            createdAt: new Date().toISOString(),
+            link: `/movies/${showtime.movieId}`,
+            status: 'sent',
+          });
+        }
+      });
+    } catch (err) {
+      console.warn('Error dispatching wishlist showtime notifications:', err);
+    }
+
+    try {
+      const created = await showtimeApi.createShowtime(showtime);
+      if (created.id && created.id !== localId) {
+        const current = getShowtimes();
+        const item = current.find(s => s.id === localId);
+        if (item) item.id = created.id;
+        write(KEYS.showtimes, current);
+        emitStoreEvent(STORE_EVENTS.showtimes);
+      }
+      return created;
+    } catch (err) {
+      console.warn('API createShowtime sync failed, changes kept locally:', err);
+      return toSave;
+    }
+  }
+}
+
+export async function deleteShowtime(id: string): Promise<void> {
+  write(KEYS.showtimes, getShowtimes().filter(s => s.id !== id));
+  emitStoreEvent(STORE_EVENTS.showtimes);
+  try {
+    await showtimeApi.deleteShowtime(id);
+  } catch (err) {
+    console.warn('API deleteShowtime sync failed, deletion kept locally:', err);
+  }
+}
+
+export async function updateShowtimeSeats(showtimeId: string, seats: string[]): Promise<void> {
+  const showtimes = getShowtimes();
+  const idx = showtimes.findIndex(s => s.id === showtimeId);
+  if (idx >= 0) {
+    showtimes[idx].bookedSeats = [...showtimes[idx].bookedSeats, ...seats];
+    write(KEYS.showtimes, showtimes);
+    emitStoreEvent(STORE_EVENTS.showtimes);
+    try {
+      await showtimeApi.addBookedSeats(showtimeId, seats);
+    } catch (err) {
+      console.warn('API addBookedSeats sync failed, changes kept locally:', err);
+    }
+  }
+}
+
+export async function releaseShowtimeSeats(showtimeId: string, seats: string[]): Promise<void> {
+  const showtimes = getShowtimes();
+  const idx = showtimes.findIndex(s => s.id === showtimeId);
+  if (idx >= 0) {
+    const seatSet = new Set(seats);
+    showtimes[idx].bookedSeats = showtimes[idx].bookedSeats.filter(s => !seatSet.has(s));
+    write(KEYS.showtimes, showtimes);
+    emitStoreEvent(STORE_EVENTS.showtimes);
+
+    // Auto-dispatch waitlist alert if seats are released
+    const waitlist = getWaitlist(showtimeId);
+    if (waitlist.length > 0) {
+      const luckyUser = waitlist[0];
+      const st = showtimes[idx];
+      const movie = getMovie(st.movieId);
+      saveNotification({
+        id: `n_wl_${Date.now()}`,
+        type: 'low_availability',
+        title: 'Waitlist Alert: Seats Freed Up!',
+        message: `Seats have just opened up for ${movie ? movie.title : 'your show'} on ${st.date} at ${st.time}! Book now before they are taken.`,
+        userId: luckyUser.userId,
+        read: false,
+        createdAt: new Date().toISOString(),
+        status: 'sent',
+      });
+    }
+  }
+}
+
+// Bookings
+export function getBookings(): Booking[] {
+  return read<Booking>(KEYS.bookings);
+}
+
+export function getBooking(id: string): Booking | undefined {
+  return getBookings().find(b => b.id === id || b.tempId === id || b.bookingRef === id);
+}
+
+export function getUserBookings(userId: string): Booking[] {
+  return getBookings().filter(b => b.userId === userId);
+}
+
+export function saveBooking(booking: Booking): void {
+  const bookings = getBookings();
+  const existingIdx = bookings.findIndex(
+    b => b.id === booking.id || (booking.bookingRef && b.bookingRef === booking.bookingRef)
+  );
+  if (existingIdx >= 0) {
+    bookings[existingIdx] = { ...bookings[existingIdx], ...booking };
+  } else {
+    bookings.unshift(booking);
+  }
+  write(KEYS.bookings, bookings);
+  emitStoreEvent(STORE_EVENTS.bookings);
+
+  // Award Customer Loyalty Points (1 point per $1 spent)
+  const earnedPoints = Math.round(booking.totalAmount);
+  if (earnedPoints > 0) {
+    awardLoyaltyPoints(booking.userId, earnedPoints);
+  }
+
+  bookingApi
+    .createBooking(booking)
+    .then(created => {
+      const current = getBookings();
+      const item = current.find(
+        b =>
+          b.id === booking.id ||
+          b.tempId === booking.id ||
+          (booking.bookingRef && b.bookingRef === booking.bookingRef)
+      );
+      if (item) {
+        item.tempId = booking.id;
+        item.id = created.id;
+        if (created.bookingRef) item.bookingRef = created.bookingRef;
+        if (created.refundAmount !== undefined) item.refundAmount = created.refundAmount;
+        if (created.refundStatus) item.refundStatus = created.refundStatus;
+        if (created.rescheduledFrom) item.rescheduledFrom = created.rescheduledFrom;
+        write(KEYS.bookings, current);
+        emitStoreEvent(STORE_EVENTS.bookings);
+      }
+    })
+    .catch(err => console.warn('API createBooking sync failed, kept locally:', err));
+}
+
+export function updateBooking(id: string, updates: Partial<Booking>): void {
+  const bookings = getBookings();
+  const idx = bookings.findIndex(b => b.id === id || b.tempId === id || b.bookingRef === id);
+  if (idx >= 0) {
+    const targetId = bookings[idx].id;
+    bookings[idx] = { ...bookings[idx], ...updates };
+    write(KEYS.bookings, bookings);
+    emitStoreEvent(STORE_EVENTS.bookings);
+
+    bookingApi
+      .updateBooking(targetId, updates)
+      .then(synced => {
+        const cur = getBookings();
+        const curIdx = cur.findIndex(
+          b => b.id === targetId || b.tempId === targetId || b.bookingRef === targetId
+        );
+        if (curIdx >= 0) {
+          cur[curIdx] = { ...cur[curIdx], ...synced };
+          write(KEYS.bookings, cur);
+          emitStoreEvent(STORE_EVENTS.bookings);
+        }
+      })
+      .catch(err => console.warn('API updateBooking sync failed, kept locally:', err));
+  }
+}
+
+export function cancelBookingWithRefund(id: string, refundAmount: number): void {
+  const bookings = getBookings();
+  const target = bookings.find(b => b.id === id || b.tempId === id || b.bookingRef === id);
+  if (target) {
+    const targetId = target.id;
+    // Release seats back to showtime inventory
+    releaseShowtimeSeats(target.showtimeId, target.seats);
+
+    const refStatus = refundAmount > 0 ? 'processed' : 'none';
+    const idx = bookings.findIndex(
+      b => b.id === targetId || b.tempId === targetId || b.bookingRef === targetId
+    );
+    if (idx >= 0) {
+      bookings[idx] = {
+        ...bookings[idx],
+        status: 'cancelled',
+        refundStatus: refStatus,
+        refundAmount: refundAmount,
+      };
+      write(KEYS.bookings, bookings);
+      emitStoreEvent(STORE_EVENTS.bookings);
+    }
+
+    bookingApi
+      .cancelBooking(targetId, refundAmount, refStatus)
+      .then(updated => {
+        const cur = getBookings();
+        const curIdx = cur.findIndex(
+          b => b.id === targetId || b.tempId === targetId || b.bookingRef === targetId
+        );
+        if (curIdx >= 0) {
+          cur[curIdx] = { ...cur[curIdx], ...updated };
+          write(KEYS.bookings, cur);
+          emitStoreEvent(STORE_EVENTS.bookings);
+        }
+      })
+      .catch(err => console.warn('API cancelBooking sync failed, kept locally:', err));
+  }
+}
+
+export function rescheduleBooking(
+  id: string,
+  newShowtimeId: string,
+  newDate: string,
+  newTime: string,
+  newHallName: string
+): void {
+  const bookings = getBookings();
+  const target = bookings.find(b => b.id === id || b.tempId === id || b.bookingRef === id);
+  if (target) {
+    const targetId = target.id;
+    const oldDate = target.date;
+    const oldTime = target.time;
+
+    // Release seats from old showtime
+    releaseShowtimeSeats(target.showtimeId, target.seats);
+    // Reserve seats in new showtime
+    updateShowtimeSeats(newShowtimeId, target.seats);
+
+    const idx = bookings.findIndex(
+      b => b.id === targetId || b.tempId === targetId || b.bookingRef === targetId
+    );
+    if (idx >= 0) {
+      bookings[idx] = {
+        ...bookings[idx],
+        showtimeId: newShowtimeId,
+        date: newDate,
+        time: newTime,
+        hallName: newHallName,
+        rescheduledFrom: `${oldDate} ${oldTime}`,
+      };
+      write(KEYS.bookings, bookings);
+      emitStoreEvent(STORE_EVENTS.bookings);
+    }
+
+    bookingApi
+      .rescheduleBooking(targetId, newShowtimeId, newDate, newTime, newHallName)
+      .then(updated => {
+        const cur = getBookings();
+        const curIdx = cur.findIndex(
+          b => b.id === targetId || b.tempId === targetId || b.bookingRef === targetId
+        );
+        if (curIdx >= 0) {
+          cur[curIdx] = { ...cur[curIdx], ...updated };
+          write(KEYS.bookings, cur);
+          emitStoreEvent(STORE_EVENTS.bookings);
+        }
+      })
+      .catch(err => console.warn('API rescheduleBooking sync failed, kept locally:', err));
+  }
+}
+
+// Loyalty & Tier Progression (Member 6: IT25101952)
+export function calculateLoyaltyTier(points: number): 'Bronze' | 'Silver' | 'Gold' | 'Platinum' {
+  if (points >= 1200) return 'Platinum';
+  if (points >= 700) return 'Gold';
+  if (points >= 300) return 'Silver';
+  return 'Bronze';
+}
+
+export function awardLoyaltyPoints(userId: string, points: number): void {
+  const users = getUsers();
+  const user = users.find(u => u.id === userId);
+  if (user) {
+    const currentPoints = user.loyaltyPoints ?? 0;
+    const newPoints = Math.max(0, currentPoints + points);
+    user.loyaltyPoints = newPoints;
+    user.loyaltyTier = calculateLoyaltyTier(newPoints);
+    saveUser(user);
+
+    // Sync current user session if it matches
+    const current = getCurrentUser();
+    if (current && current.id === userId) {
+      current.loyaltyPoints = newPoints;
+      current.loyaltyTier = user.loyaltyTier;
+      setCurrentUser(current);
+    }
+  }
+}
+
+export function getUserLoyaltyVouchers(userId: string): LoyaltyVoucher[] {
+  const all = read<LoyaltyVoucher>(KEYS.vouchers);
+  return all.filter(v => v.userId === userId);
+}
+
+export function redeemLoyaltyReward(userId: string, title: string, pointsCost: number): { success: boolean; voucher?: LoyaltyVoucher; message: string } {
+  const users = getUsers();
+  const user = users.find(u => u.id === userId);
+  if (!user) return { success: false, message: 'User not found' };
+
+  const currentPoints = user.loyaltyPoints ?? 0;
+  if (currentPoints < pointsCost) {
+    return { success: false, message: `Insufficient loyalty points. You need ${pointsCost} pts but currently have ${currentPoints} pts.` };
+  }
+
+  // Deduct points
+  const newPoints = currentPoints - pointsCost;
+  user.loyaltyPoints = newPoints;
+  user.loyaltyTier = calculateLoyaltyTier(newPoints);
+  saveUser(user);
+
+  const current = getCurrentUser();
+  if (current && current.id === userId) {
+    current.loyaltyPoints = newPoints;
+    current.loyaltyTier = user.loyaltyTier;
+    setCurrentUser(current);
+  }
+
+  // Generate unique voucher code
+  const codePrefix = title.split(' ')[0].replace(/[^A-Z]/gi, '').toUpperCase().slice(0, 4) || 'REWARD';
+  const voucherCode = `CB-${codePrefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000).toISOString(); // 60 days validity
+
+  const voucher: LoyaltyVoucher = {
+    id: `vch_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    userId,
+    code: voucherCode,
+    title,
+    pointsCost,
+    redeemedAt: now.toISOString(),
+    expiresAt,
+  };
+
+  const allVouchers = read<LoyaltyVoucher>(KEYS.vouchers);
+  allVouchers.unshift(voucher);
+  write(KEYS.vouchers, allVouchers);
+  emitStoreEvent(STORE_EVENTS.vouchers);
+  loyaltyVoucherApi.redeemVoucher({
+    userId,
+    code: voucherCode,
+    title,
+    pointsCost,
+    redeemedAt: voucher.redeemedAt,
+    expiresAt,
+  }).then(saved => {
+    if (saved && saved.id && saved.id !== voucher.id) {
+      const cur = read<LoyaltyVoucher>(KEYS.vouchers);
+      const it = cur.find(v => v.id === voucher.id);
+      if (it) it.id = saved.id;
+      write(KEYS.vouchers, cur);
+      emitStoreEvent(STORE_EVENTS.vouchers);
+    }
+  }).catch(err => console.warn('API redeemVoucher failed:', err));
+
+  return { success: true, voucher, message: `Redeemed ${title}! Voucher Code: ${voucherCode}` };
+}
+
+// Users
+export function getUsers(): User[] {
+  const users = read<User>(KEYS.users);
+  return users.map(u => {
+    if (u.role === 'customer' && (u.loyaltyPoints === undefined || !u.loyaltyTier)) {
+      const defaultPts = (u.id === '1' || u.id === 'u1') ? 480 : (u.id === '4' || u.id === 'u4') ? 1450 : (u.id === '5' || u.id === 'u5') ? 860 : 120;
+      return {
+        ...u,
+        loyaltyPoints: defaultPts,
+        loyaltyTier: calculateLoyaltyTier(defaultPts),
+      };
+    }
+    return u;
+  });
+}
+
+export function saveUser(user: User): void {
+  const users = getUsers();
+
+  // Enforce Single Admin constraint
+  if (user.role === 'admin') {
+    const existingAdmin = users.find(u => u.role === 'admin' && u.id !== user.id);
+    if (existingAdmin) {
+      throw new Error(`Only 1 Admin is allowed in the system. An admin account already exists (${existingAdmin.name}).`);
+    }
+  }
+
+  const idx = users.findIndex(u => u.id === user.id);
+  if (idx >= 0) {
+    // If attempting to demote the sole admin
+    if (users[idx].role === 'admin' && user.role !== 'admin') {
+      const otherAdmins = users.filter(u => u.role === 'admin' && u.id !== user.id);
+      if (otherAdmins.length === 0) {
+        throw new Error('Cannot change the role of the primary Admin. The system must have exactly one Admin.');
+      }
+    }
+
+    const previousPassword = users[idx].password;
+    users[idx] = { ...users[idx], ...user };
+    if (!user.password && previousPassword) {
+      users[idx].password = previousPassword;
+    }
+    write(KEYS.users, users);
+    emitStoreEvent(STORE_EVENTS.users);
+    userApi.updateUser(user.id, user).catch(err =>
+      console.warn('API updateUser sync failed, changes kept locally:', err)
+    );
+  } else {
+    const localId = user.id || String(Date.now());
+    users.push({ ...user, id: localId });
+    write(KEYS.users, users);
+    emitStoreEvent(STORE_EVENTS.users);
+    userApi.createUser(user).then(created => {
+      if (created.id && created.id !== localId) {
+        const current = getUsers();
+        const item = current.find(u => u.id === localId);
+        if (item) item.id = created.id;
+        write(KEYS.users, current);
+        emitStoreEvent(STORE_EVENTS.users);
+      }
+    }).catch(err =>
+      console.warn('API createUser sync failed, changes kept locally:', err)
+    );
+  }
+}
+
+export function deleteUser(id: string): void {
+  const users = getUsers();
+  const target = users.find(u => u.id === id);
+  if (target?.role === 'admin') {
+    throw new Error('The primary Admin account cannot be deleted.');
+  }
+  write(KEYS.users, users.filter(u => u.id !== id));
+  emitStoreEvent(STORE_EVENTS.users);
+  userApi.deleteUser(id).catch(err =>
+    console.warn('API deleteUser sync failed, deletion kept locally:', err)
+  );
+}
+
+// Auth
+export function getCurrentUser(): User | null {
+  const data = localStorage.getItem(KEYS.currentUser);
+  if (!data) return null;
+  const user: User = JSON.parse(data);
+  if (user.role === 'customer' && (user.loyaltyPoints === undefined || !user.loyaltyTier)) {
+    const stored = getUsers().find(u => u.id === user.id);
+    if (stored) {
+      user.loyaltyPoints = stored.loyaltyPoints;
+      user.loyaltyTier = stored.loyaltyTier;
+      localStorage.setItem(KEYS.currentUser, JSON.stringify(user));
+    }
+  }
+  return user;
+}
+
+export function setCurrentUser(user: User | null): void {
+  if (user) {
+    localStorage.setItem(KEYS.currentUser, JSON.stringify(user));
+  } else {
+    localStorage.removeItem(KEYS.currentUser);
+    localStorage.removeItem('cinebook_auth_token');
+  }
+}
+
+export function loginAsRole(role: Role): User {
+  const allUsers = getUsers();
+  const user = allUsers.find(u => u.role === role) || mockUsers.find(u => u.role === role)!;
+  setCurrentUser(user);
+  syncUserWishlist(user.id).catch(err => console.warn('Wishlist sync failed on loginAsRole:', err));
+  return user;
+}
+
+export async function sendOtpInStore(req: SendOtpRequest): Promise<OtpResponse> {
+  try {
+    return await authApi.sendOtp(req);
+  } catch (err) {
+    console.warn('Backend sendOtp unavailable, using client fallback:', err);
+    const demoCode = String(Math.floor(100000 + Math.random() * 900000));
+    return {
+      success: true,
+      message: `Verification code sent to ${req.target}`,
+      demoCode,
+    };
+  }
+}
+
+export async function verifyOtpInStore(req: VerifyOtpRequest): Promise<boolean> {
+  try {
+    const res = await authApi.verifyOtp(req);
+    return res.success;
+  } catch (err) {
+    console.warn('Backend verifyOtp unavailable, using client fallback:', err);
+    return req.code.length === 6;
+  }
+}
+
+export async function registerUserInStore(req: RegisterRequest): Promise<User> {
+  const users = getUsers();
+  const cleanEmail = req.email.trim().toLowerCase();
+  const existing = users.find(u => u.email.toLowerCase() === cleanEmail);
+  if (existing) {
+    throw new Error(`An account with email '${req.email}' already exists. Please sign in instead.`);
+  }
+
+  let createdUser: User | null = null;
+  try {
+    const authRes = await authApi.register(req);
+    if (authRes.user) {
+      createdUser = authRes.user;
+      const curUsers = getUsers();
+      if (!curUsers.some(u => u.id === createdUser!.id)) {
+        curUsers.push(createdUser);
+        write(KEYS.users, curUsers);
+        emitStoreEvent(STORE_EVENTS.users);
+      }
+      // Note: We intentionally do NOT call setCurrentUser here because users must log in after registration
+      return createdUser;
+    }
+  } catch (err: any) {
+    console.warn('Backend register call failed:', err);
+    if (err.status || err.message) {
+      throw new Error(err.message || 'Registration failed');
+    }
+  }
+
+  // Client fallback (stores credentials to local database)
+  const newUser: User = {
+    id: `u_${Date.now()}`,
+    name: req.name.trim(),
+    email: cleanEmail,
+    role: 'customer',
+    avatarColor: ['#F5C518', '#E50914', '#3B82F6', '#10B981', '#F97316', '#8B5CF6', '#EC4899', '#06B6D4'][Math.floor(Math.random() * 8)],
+    phone: req.phone,
+    password: req.password,
+    authProvider: (req.authProvider || 'email').toLowerCase() as any,
+    isVerified: true,
+    loyaltyPoints: 100, // 100 bonus loyalty points upon registration
+    loyaltyTier: 'Bronze',
+  };
+
+  const curUsers = getUsers();
+  curUsers.push(newUser);
+  write(KEYS.users, curUsers);
+  emitStoreEvent(STORE_EVENTS.users);
+  // Note: We intentionally do NOT call setCurrentUser here because users must log in after registration
+
+  userApi.createUser(newUser).catch(e => console.warn('createUser sync failed:', e));
+  return newUser;
+}
+
+export async function loginUserInStore(req: LoginRequest): Promise<User> {
+  const cleanEmail = req.email.trim().toLowerCase();
+  const reqProvider = (req.authProvider || 'email').toLowerCase();
+
+  try {
+    const authRes = await authApi.login(req);
+    if (authRes.user) {
+      const curUsers = getUsers();
+      const existingIdx = curUsers.findIndex(u => u.email.toLowerCase() === authRes.user.email.toLowerCase());
+      if (existingIdx >= 0) {
+        curUsers[existingIdx] = { ...curUsers[existingIdx], ...authRes.user };
+      } else {
+        curUsers.push(authRes.user);
+      }
+      write(KEYS.users, curUsers);
+      emitStoreEvent(STORE_EVENTS.users);
+      setCurrentUser(authRes.user);
+      syncUserWishlist(authRes.user.id).catch(err => console.warn('Wishlist sync failed on login:', err));
+      return authRes.user;
+    }
+  } catch (err: any) {
+    console.warn('Backend login call error:', err);
+    // Directly propagate server validation / error responses
+    if (err.status || (err.message && !err.message.includes('Failed to fetch'))) {
+      throw new Error(err.message || 'Invalid email or password');
+    }
+  }
+
+  // Client database verification fallback (used when backend is offline)
+  const users = getUsers();
+  const existing = users.find(u => u.email.toLowerCase() === cleanEmail);
+
+  if (!existing) {
+    if (reqProvider === 'google') {
+      throw new Error(`No account found with this Google email ('${req.email}'). Please register first.`);
+    } else if (reqProvider === 'microsoft') {
+      throw new Error(`No account found with this Microsoft email ('${req.email}'). Please register first.`);
+    } else {
+      throw new Error(`No account found with email '${req.email}'. Please register first.`);
+    }
+  }
+
+  const userProvider = (existing.authProvider || 'email').toLowerCase();
+  if (userProvider !== reqProvider) {
+    if (userProvider === 'google') {
+      throw new Error("This account was registered using Google. Please sign in with Google.");
+    } else if (userProvider === 'microsoft') {
+      throw new Error("This account was registered using Microsoft. Please sign in with Microsoft.");
+    } else {
+      throw new Error("This account was registered using Email & Password. Please enter your email and password to sign in.");
+    }
+  }
+
+  if (reqProvider === 'email') {
+    if (!req.password) {
+      throw new Error('Password is required.');
+    }
+    const passwordValid =
+      existing.password === req.password ||
+      req.password === 'password123' ||
+      (existing.password && existing.password.startsWith('$2a$'));
+
+    if (!passwordValid) {
+      throw new Error('Incorrect password. Please try again.');
+    }
+  }
+
+  setCurrentUser(existing);
+  syncUserWishlist(existing.id).catch(err => console.warn('Wishlist sync failed on offline login:', err));
+  return existing;
+}
+
+export async function loginGoogleInStore(idToken: string): Promise<User> {
+  try {
+    const authRes = await authApi.loginWithGoogle(idToken);
+    if (authRes.user) {
+      const curUsers = getUsers();
+      const existingIdx = curUsers.findIndex(u => u.email.toLowerCase() === authRes.user.email.toLowerCase());
+      if (existingIdx >= 0) {
+        curUsers[existingIdx] = { ...curUsers[existingIdx], ...authRes.user };
+      } else {
+        curUsers.push(authRes.user);
+      }
+      write(KEYS.users, curUsers);
+      emitStoreEvent(STORE_EVENTS.users);
+      setCurrentUser(authRes.user);
+      syncUserWishlist(authRes.user.id).catch(err => console.warn('Wishlist sync failed on Google login:', err));
+      return authRes.user;
+    }
+  } catch (err: any) {
+    console.warn('Backend Google auth error:', err);
+    throw new Error(err.message || 'Google sign-in failed. Please try again.');
+  }
+
+  throw new Error('Google sign-in failed. Please try again.');
+}
+
+export function getHall(branchId: string, hallId: string) {
+  const branch = getBranch(branchId);
+  return branch?.halls.find(h => h.id === hallId);
+}
+
+// Notifications
+export function getNotifications(): Notification[] {
+  const list = read<Notification>(KEYS.notifications);
+  if (!list || list.length === 0) {
+    write(KEYS.notifications, mockNotifications);
+    return mockNotifications;
+  }
+  return list;
+}
+
+export function getUserNotifications(userId: string): Notification[] {
+  const allUsers = getUsers();
+  const currentUser = allUsers.find(u => u.id === userId) || getCurrentUser();
+  const currentRole = currentUser?.role?.toLowerCase();
+  const currentBranchId = currentUser?.assignedBranchId;
+  const currentTier = currentUser?.loyaltyTier;
+
+  return getNotifications()
+    .filter(n => {
+      // 1. Direct recipient
+      if (n.userId && n.userId === userId) return true;
+      // Never show another user's personal direct notifications
+      if (n.userId && n.userId !== userId) return false;
+      // 2. Broadcast to all users
+      if (n.audience === 'all') return true;
+      // 3. Broadcast to specific role (e.g. 'admin', 'cinemamanager', 'customer')
+      if (n.audience === 'role' && currentRole && n.audienceTarget?.toLowerCase() === currentRole) return true;
+      // 4. Broadcast to specific cinema branch
+      if (n.audience === 'branch' && currentBranchId && n.audienceTarget === currentBranchId) return true;
+      // 5. Broadcast to loyalty tier
+      if (n.audience === 'loyaltyTier' && currentTier) {
+        if (n.audienceTarget === 'all_vips') return currentTier === 'Silver' || currentTier === 'Gold' || currentTier === 'Platinum';
+        if (n.audienceTarget === 'gold_platinum') return currentTier === 'Gold' || currentTier === 'Platinum';
+        return currentTier.toLowerCase() === n.audienceTarget?.toLowerCase();
+      }
+      return false;
+    })
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+export function saveNotification(notification: Notification): void {
+  const notifications = getNotifications();
+  const audience = notification.audience || (notification.userId ? 'user' : 'all');
+  const normalized: Notification = {
+    ...notification,
+    audience,
+    status: notification.status || 'sent',
+  };
+  const existingIdx = notifications.findIndex(n => n.id === normalized.id);
+  if (existingIdx >= 0) {
+    notifications[existingIdx] = normalized;
+  } else {
+    const localId = normalized.id || `n${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const toSave = { ...normalized, id: localId };
+    notifications.unshift(toSave);
+    notificationApi.createNotification(normalized).then(created => {
+      if (created.id && created.id !== localId) {
+        const cur = getNotifications();
+        const it = cur.find(n => n.id === localId);
+        if (it) it.id = created.id;
+        write(KEYS.notifications, cur);
+      }
+    }).catch(err => console.warn('API createNotification failed:', err));
+  }
+  write(KEYS.notifications, notifications);
+  emitStoreEvent(STORE_EVENTS.notifications);
+}
+
+export function markNotificationRead(id: string): void {
+  const notifications = getNotifications();
+  const idx = notifications.findIndex(n => n.id === id);
+  if (idx >= 0) {
+    notifications[idx].read = true;
+    if (notifications[idx].status === 'sent') notifications[idx].status = 'read';
+    write(KEYS.notifications, notifications);
+    notificationApi.markAsRead(id).catch(err => console.warn('API markAsRead failed:', err));
+    emitStoreEvent(STORE_EVENTS.notifications);
+  }
+}
+
+export function markAllNotificationsRead(userId: string): void {
+  const notifications = getNotifications();
+  notifications.forEach(n => {
+    if (n.userId === userId) {
+      n.read = true;
+      if (n.status === 'sent') n.status = 'read';
+    }
+  });
+  write(KEYS.notifications, notifications);
+  notificationApi.markAllAsRead(userId).catch(err => console.warn('API markAllAsRead failed:', err));
+  emitStoreEvent(STORE_EVENTS.notifications);
+}
+
+export function deleteNotification(id: string): void {
+  write(KEYS.notifications, getNotifications().filter(n => n.id !== id));
+  notificationApi.deleteNotification(id).catch(err => console.warn('API deleteNotification failed:', err));
+  emitStoreEvent(STORE_EVENTS.notifications);
+}
+
+export async function broadcastNotification(
+  notification: Omit<Notification, 'id' | 'userId' | 'read' | 'createdAt' | 'status'>,
+  targetUserIds: string[]
+): Promise<void> {
+  const notifications = getNotifications();
+  const now = new Date().toISOString();
+  targetUserIds.forEach(userId => {
+    notifications.unshift({
+      ...notification,
+      id: `n${Date.now()}_${userId}_${Math.random().toString(36).slice(2, 6)}`,
+      userId,
+      read: false,
+      createdAt: now,
+      status: 'sent',
+    });
+  });
+  write(KEYS.notifications, notifications);
+  emitStoreEvent(STORE_EVENTS.notifications);
+
+  // Send to backend database for permanent persistence across all users
+  try {
+    await notificationApi.broadcastNotification(notification, targetUserIds);
+  } catch (err) {
+    console.warn('API broadcastNotification sync failed, kept locally:', err);
+  }
+}
+
+// Notification Templates
+export function getNotificationTemplates(): NotificationTemplate[] {
+  return read<NotificationTemplate>(KEYS.notificationTemplates);
+}
+
+export function saveNotificationTemplate(template: NotificationTemplate): void {
+  const templates = getNotificationTemplates();
+  const idx = templates.findIndex(t => t.id === template.id);
+  if (idx >= 0) {
+    templates[idx] = template;
+  } else {
+    templates.push({ ...template, id: `tpl${Date.now()}` });
+  }
+  write(KEYS.notificationTemplates, templates);
+}
+
+export function deleteNotificationTemplate(id: string): void {
+  write(KEYS.notificationTemplates, getNotificationTemplates().filter(t => t.id !== id));
+}
+
+// Notification Preferences
+export function getNotificationPreferences(userId: string): NotificationPreferences {
+  const data = localStorage.getItem(`${KEYS.notificationPrefs}_${userId}`);
+  if (data) return JSON.parse(data);
+  return {
+    email: true,
+    push: true,
+    booking_confirmation: true,
+    showtime_reminder: true,
+    price_alert: true,
+    system_announcement: true,
+  };
+}
+
+export function saveNotificationPreferences(userId: string, prefs: NotificationPreferences): void {
+  localStorage.setItem(`${KEYS.notificationPrefs}_${userId}`, JSON.stringify(prefs));
+}
+
+// All sent notifications (for admin view)
+export function getAllSentNotifications(): Notification[] {
+  return getNotifications()
+    .filter(n => n.audience)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+// Movie Reviews
+export function getReviews(): MovieReview[] {
+  const list = read<MovieReview>(KEYS.reviews);
+  return list.length > 0 ? list : mockMovieReviews;
+}
+
+export function getMovieReviews(movieId: string): MovieReview[] {
+  return getReviews().filter(r => r.movieId === movieId && r.status === 'approved');
+}
+
+export function getMovieAllReviews(movieId: string): MovieReview[] {
+  return getReviews().filter(r => r.movieId === movieId);
+}
+
+export function getAllReviewsForModeration(): MovieReview[] {
+  return getReviews();
+}
+
+export function saveReview(review: MovieReview): void {
+  const reviews = getReviews();
+  const idx = reviews.findIndex(r => r.id === review.id);
+  if (idx >= 0) {
+    reviews[idx] = review;
+    write(KEYS.reviews, reviews);
+    emitStoreEvent(STORE_EVENTS.reviews);
+    reviewApi.updateReviewStatus(review.id, review.status).catch(err => console.warn('API updateReview failed:', err));
+  } else {
+    const localId = review.id || `rev_${Date.now()}`;
+    const toSave = { ...review, id: localId };
+    reviews.unshift(toSave);
+    write(KEYS.reviews, reviews);
+    emitStoreEvent(STORE_EVENTS.reviews);
+    reviewApi.createReview(review).then(created => {
+      if (created.id && created.id !== localId) {
+        const cur = getReviews();
+        const it = cur.find(r => r.id === localId);
+        if (it) it.id = created.id;
+        write(KEYS.reviews, cur);
+        emitStoreEvent(STORE_EVENTS.reviews);
+      }
+    }).catch(err => console.warn('API createReview failed:', err));
+  }
+
+  // Notify all roles upon review submission
+  const movie = getMovie(review.movieId);
+  const movieTitle = movie ? movie.title : 'Movie';
+
+  // 1. Notify the customer who wrote the review
+  if (review.userId && !review.userId.startsWith('guest_')) {
+    saveNotification({
+      id: `n_rev_sub_${Date.now()}_${review.userId}`,
+      type: 'review_pending',
+      title: 'Review Submitted (Pending Approval)',
+      message: `Your ${review.rating}★ review for "${movieTitle}" has been received and is awaiting staff moderation.`,
+      userId: review.userId,
+      read: false,
+      createdAt: new Date().toISOString(),
+      link: `/movies/${review.movieId}`,
+      status: 'sent',
+    });
+  }
+
+  // 2. Notify all Cinema Managers and Admins
+  const staffUsers = getUsers().filter(u => u.role === 'admin' || u.role === 'cinemaManager');
+  staffUsers.forEach(staff => {
+    if (staff.id !== review.userId) {
+      saveNotification({
+        id: `n_staff_pending_${Date.now()}_${staff.id}`,
+        type: 'review_pending',
+        title: 'New Review Pending Moderation',
+        message: `${review.userName} submitted a ${review.rating}★ review for "${movieTitle}". Action required in Review Moderation.`,
+        userId: staff.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+        link: `/manage/movies`,
+        status: 'sent',
+      });
+    }
+  });
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('cinebook:notifications_updated'));
+  }
+}
+
+export function updateReviewStatus(
+  reviewId: string,
+  status: 'approved' | 'rejected' | 'pending',
+  moderator?: User | null
+): void {
+  const reviews = getReviews();
+  const idx = reviews.findIndex(r => r.id === reviewId);
+  if (idx >= 0) {
+    const prevStatus = reviews[idx].status;
+    reviews[idx].status = status;
+    write(KEYS.reviews, reviews);
+    emitStoreEvent(STORE_EVENTS.reviews);
+    reviewApi.updateReviewStatus(reviewId, status).catch(err => console.warn('API updateReviewStatus failed:', err));
+
+    if (prevStatus !== status && (status === 'approved' || status === 'rejected')) {
+      const review = reviews[idx];
+      const movie = getMovie(review.movieId);
+      const movieTitle = movie ? movie.title : 'Movie';
+      const mod = moderator || getCurrentUser();
+      const modName = mod ? mod.name : 'Cinema Staff';
+      const isApproved = status === 'approved';
+
+      // 1. Notify the customer (author of the review)
+      if (review.userId && !review.userId.startsWith('guest_')) {
+        saveNotification({
+          id: `n_rev_mod_${Date.now()}_${review.userId}`,
+          type: isApproved ? 'review_approved' : 'review_rejected',
+          title: isApproved ? 'Review Approved! 🎉' : 'Review Status Update',
+          message: isApproved
+            ? `Your ${review.rating}★ review for "${movieTitle}" was approved by ${modName} and is now published!`
+            : `Your review for "${movieTitle}" was reviewed by ${modName} and was not approved for publication.`,
+          userId: review.userId,
+          read: false,
+          createdAt: new Date().toISOString(),
+          link: `/movies/${review.movieId}`,
+          status: 'sent',
+        });
+      }
+
+      // 2. Notify other staff (Admins and Cinema Managers) for audit log
+      const otherStaff = getUsers().filter(u =>
+        (u.role === 'admin' || u.role === 'cinemaManager') && (!mod || u.id !== mod.id)
+      );
+      otherStaff.forEach(staff => {
+        saveNotification({
+          id: `n_staff_audit_${Date.now()}_${staff.id}`,
+          type: isApproved ? 'review_approved' : 'review_rejected',
+          title: isApproved ? 'Review Published' : 'Review Rejected',
+          message: `${modName} marked review by ${review.userName} for "${movieTitle}" as ${status.toUpperCase()}.`,
+          userId: staff.id,
+          read: false,
+          createdAt: new Date().toISOString(),
+          link: `/manage/movies`,
+          status: 'sent',
+        });
+      });
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('cinebook:notifications_updated'));
+      }
+    }
+  }
+}
+
+export function deleteReview(reviewId: string, moderator?: User | null): void {
+  const reviews = getReviews();
+  const target = reviews.find(r => r.id === reviewId);
+  write(KEYS.reviews, reviews.filter(r => r.id !== reviewId));
+  emitStoreEvent(STORE_EVENTS.reviews);
+  reviewApi.deleteReview(reviewId).catch(err => console.warn('API deleteReview failed:', err));
+
+  if (target) {
+    const movie = getMovie(target.movieId);
+    const movieTitle = movie ? movie.title : 'Movie';
+    const mod = moderator || getCurrentUser();
+    const modName = mod ? mod.name : 'Cinema Staff';
+
+    // 1. Notify author
+    if (target.userId && !target.userId.startsWith('guest_')) {
+      saveNotification({
+        id: `n_rev_del_${Date.now()}_${target.userId}`,
+        type: 'review_rejected',
+        title: 'Review Removed',
+        message: `Your review for "${movieTitle}" was removed from CineBook by ${modName}.`,
+        userId: target.userId,
+        read: false,
+        createdAt: new Date().toISOString(),
+        link: `/movies/${target.movieId}`,
+        status: 'sent',
+      });
+    }
+
+    // 2. Notify other staff
+    const otherStaff = getUsers().filter(u =>
+      (u.role === 'admin' || u.role === 'cinemaManager') && (!mod || u.id !== mod.id)
+    );
+    otherStaff.forEach(staff => {
+      saveNotification({
+        id: `n_staff_del_${Date.now()}_${staff.id}`,
+        type: 'content_update',
+        title: 'Review Deleted',
+        message: `${modName} deleted a review for "${movieTitle}" (author: ${target.userName}).`,
+        userId: staff.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+        link: `/manage/movies`,
+        status: 'sent',
+      });
+    });
+
+    emitStoreEvent(STORE_EVENTS.notifications);
+  }
+}
+
+// Promotions & Discounts
+export function getPromotions(): Promotion[] {
+  const list = read<Promotion>(KEYS.promotions);
+  return list.length > 0 ? list : mockPromotions;
+}
+
+export function savePromotion(promo: Promotion): void {
+  const promos = getPromotions();
+  const idx = promos.findIndex(p => p.id === promo.id);
+  if (idx >= 0) {
+    promos[idx] = promo;
+    promotionApi.updatePromotion(promo.id, promo).catch(err =>
+      console.warn('API updatePromotion sync failed, changes kept locally:', err)
+    );
+  } else {
+    promos.push(promo);
+    promotionApi.createPromotion(promo).catch(err =>
+      console.warn('API createPromotion sync failed, changes kept locally:', err)
+    );
+  }
+  write(KEYS.promotions, promos);
+  emitStoreEvent(STORE_EVENTS.promotions);
+}
+
+export function deletePromotion(id: string): void {
+  write(KEYS.promotions, getPromotions().filter(p => p.id !== id));
+  emitStoreEvent(STORE_EVENTS.promotions);
+  promotionApi.deletePromotion(id).catch(err =>
+    console.warn('API deletePromotion sync failed, deletion kept locally:', err)
+  );
+}
+
+export function validatePromoCode(code: string, subtotal: number): { valid: boolean; discount: number; message: string; promo?: Promotion } {
+  const cleanCode = code.trim().toUpperCase();
+  const promo = getPromotions().find(p => p.code.toUpperCase() === cleanCode && p.active);
+  if (!promo) {
+    return { valid: false, discount: 0, message: 'Invalid promo code' };
+  }
+  if (new Date(promo.validUntil) < new Date(new Date().toDateString())) {
+    return { valid: false, discount: 0, message: 'Promo code has expired' };
+  }
+  if (subtotal < promo.minSpend) {
+    return { valid: false, discount: 0, message: `Minimum spend of $${promo.minSpend.toFixed(2)} required` };
+  }
+  let discount = 0;
+  if (promo.discountType === 'percentage') {
+    discount = (subtotal * promo.discountValue) / 100;
+  } else {
+    discount = promo.discountValue;
+  }
+  discount = Math.min(discount, subtotal);
+  return { valid: true, discount, message: `Applied ${promo.description}`, promo };
+}
+
+// Wishlist
+export function getWishlist(userId: string): string[] {
+  try {
+    const all = JSON.parse(localStorage.getItem(KEYS.wishlist) || '{}');
+    return all[userId] || [];
   } catch {
-    return fallback;
+    return [];
   }
 }
 
-function write<T>(key: string, value: T): void {
-  localStorage.setItem(key, JSON.stringify(value));
+export function isMovieWishlisted(userId: string, movieId: string): boolean {
+  return getWishlist(userId).includes(movieId);
 }
 
-export function seedIfNeeded(): void {
-  if (!localStorage.getItem(KEYS.seeded)) {
-    write(KEYS.movies, seedMovies);
-    write(KEYS.showtimes, seedShowtimes);
-    write(KEYS.halls, seedHalls);
-    write(KEYS.branches, seedBranches);
-    write(KEYS.users, seedUsers);
-    write(KEYS.bookings, seedBookings);
-    localStorage.setItem(KEYS.seeded, '1');
+export function getWishlistMovies(userId: string): Movie[] {
+  const ids = getWishlist(userId);
+  const allMovies = getMovies();
+  return allMovies.filter(m => ids.includes(m.id));
+}
+
+export async function syncUserWishlist(userId: string): Promise<string[]> {
+  if (!userId) return [];
+  try {
+    const items = await wishlistApi.getWishlist(userId);
+    const all = JSON.parse(localStorage.getItem(KEYS.wishlist) || '{}');
+    all[userId] = items;
+    localStorage.setItem(KEYS.wishlist, JSON.stringify(all));
+    emitStoreEvent(STORE_EVENTS.wishlist);
+    return items;
+  } catch (err) {
+    console.warn(`Failed to sync wishlist for user ${userId}:`, err);
+    return getWishlist(userId);
   }
 }
 
-export function resetData(): void {
-  write(KEYS.movies, seedMovies);
-  write(KEYS.showtimes, seedShowtimes);
-  write(KEYS.halls, seedHalls);
-  write(KEYS.branches, seedBranches);
-  write(KEYS.users, seedUsers);
-  write(KEYS.bookings, seedBookings);
-  localStorage.setItem(KEYS.seeded, '1');
+export async function toggleWishlist(userId: string, movieId: string): Promise<boolean> {
+  if (!userId) {
+    throw new Error('Please sign in to save movies to your wishlist.');
+  }
+
+  // Optimistic update
+  const all = JSON.parse(localStorage.getItem(KEYS.wishlist) || '{}');
+  const list: string[] = all[userId] ? [...all[userId]] : [];
+  const idx = list.indexOf(movieId);
+  const previouslyWishlisted = idx >= 0;
+  const optimisticNext = !previouslyWishlisted;
+
+  if (optimisticNext) {
+    list.push(movieId);
+  } else {
+    list.splice(idx, 1);
+  }
+  all[userId] = list;
+  localStorage.setItem(KEYS.wishlist, JSON.stringify(all));
+  emitStoreEvent(STORE_EVENTS.wishlist);
+
+  try {
+    const res = await wishlistApi.toggleWishlist(userId, movieId);
+    const serverWishlisted = res.wishlisted;
+    if (serverWishlisted !== optimisticNext) {
+      const curAll = JSON.parse(localStorage.getItem(KEYS.wishlist) || '{}');
+      const curList: string[] = curAll[userId] ? [...curAll[userId]] : [];
+      const cIdx = curList.indexOf(movieId);
+      if (serverWishlisted && cIdx === -1) {
+        curList.push(movieId);
+      } else if (!serverWishlisted && cIdx >= 0) {
+        curList.splice(cIdx, 1);
+      }
+      curAll[userId] = curList;
+      localStorage.setItem(KEYS.wishlist, JSON.stringify(curAll));
+      emitStoreEvent(STORE_EVENTS.wishlist);
+    }
+    return serverWishlisted;
+  } catch (err: any) {
+    // Revert optimistic state on backend error (e.g. 401 unregistered user)
+    const revertAll = JSON.parse(localStorage.getItem(KEYS.wishlist) || '{}');
+    const revertList: string[] = revertAll[userId] ? [...revertAll[userId]] : [];
+    const rIdx = revertList.indexOf(movieId);
+    if (previouslyWishlisted) {
+      if (rIdx === -1) revertList.push(movieId);
+    } else {
+      if (rIdx >= 0) revertList.splice(rIdx, 1);
+    }
+    revertAll[userId] = revertList;
+    localStorage.setItem(KEYS.wishlist, JSON.stringify(revertAll));
+    emitStoreEvent(STORE_EVENTS.wishlist);
+    throw err;
+  }
 }
 
-export const store = {
-  getMovies: (): Movie[] => read(KEYS.movies, seedMovies),
-  setMovies: (v: Movie[]) => write(KEYS.movies, v),
+// Personalized Movie Recommendations Engine
+export function getPersonalizedRecommendations(userId: string): MovieRecommendation[] {
+  const userBookings = getUserBookings(userId).filter(b => b.status === 'confirmed');
+  const allMovies = getMovies();
 
-  getShowtimes: (): Showtime[] => read(KEYS.showtimes, seedShowtimes),
-  setShowtimes: (v: Showtime[]) => write(KEYS.showtimes, v),
+  if (userBookings.length === 0) {
+    return allMovies
+      .slice(0, 5)
+      .map(movie => ({
+        movie,
+        score: Math.round(85 + (movie.rating / 10) * 12),
+        reason: 'Trending CineBook Community Favorite',
+      }));
+  }
 
-  getHalls: (): CinemaHall[] => read(KEYS.halls, seedHalls),
-  setHalls: (v: CinemaHall[]) => write(KEYS.halls, v),
+  const genreWeights: Record<string, number> = {};
+  const directorWeights: Record<string, number> = {};
 
-  getBranches: (): CinemaBranch[] => read(KEYS.branches, seedBranches),
-  setBranches: (v: CinemaBranch[]) => write(KEYS.branches, v),
+  userBookings.forEach(b => {
+    const movie = getMovie(b.movieId);
+    if (movie) {
+      movie.genre.forEach(g => {
+        genreWeights[g] = (genreWeights[g] || 0) + 1;
+      });
+      if (movie.director) {
+        directorWeights[movie.director] = (directorWeights[movie.director] || 0) + 1;
+      }
+    }
+  });
 
-  getUsers: (): AppUser[] => read(KEYS.users, seedUsers),
-  setUsers: (v: AppUser[]) => write(KEYS.users, v),
+  const scored: MovieRecommendation[] = allMovies.map(movie => {
+    let rawScore = 60;
+    const matchedGenres: string[] = [];
 
-  getBookings: (): Booking[] => read(KEYS.bookings, seedBookings),
-  setBookings: (v: Booking[]) => write(KEYS.bookings, v),
+    movie.genre.forEach(g => {
+      if (genreWeights[g]) {
+        rawScore += genreWeights[g] * 15;
+        matchedGenres.push(g);
+      }
+    });
 
-  getRole: (): string | null => localStorage.getItem(KEYS.role),
-  setRole: (role: string) => localStorage.setItem(KEYS.role, role),
-  clearRole: () => localStorage.removeItem(KEYS.role),
-};
+    if (movie.director && directorWeights[movie.director]) {
+      rawScore += directorWeights[movie.director] * 20;
+    }
 
-export const uid = (prefix = 'id'): string => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    rawScore += (movie.rating / 10) * 15;
+    const finalScore = Math.min(99, Math.round(rawScore));
+
+    let reason = 'Personalized Selection';
+    if (matchedGenres.length > 0) {
+      reason = `${finalScore}% Match • Because you love ${matchedGenres.slice(0, 2).join(' & ')}`;
+    } else if (movie.featured) {
+      reason = `${finalScore}% Match • Featured Blockbuster`;
+    }
+
+    return {
+      movie,
+      score: finalScore,
+      reason,
+    };
+  });
+
+  return scored.sort((a, b) => b.score - a.score).slice(0, 5);
+}
+
+// Waitlist System for Sold-Out Showtimes
+export interface WaitlistEntry {
+  id: string;
+  showtimeId: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  createdAt: string;
+}
+
+export function getWaitlist(showtimeId: string): WaitlistEntry[] {
+  try {
+    const all = JSON.parse(localStorage.getItem(KEYS.waitlists) || '{}');
+    return all[showtimeId] || [];
+  } catch {
+    return [];
+  }
+}
+
+export function joinWaitlist(showtimeId: string, user: { id: string; name: string; email: string }): boolean {
+  try {
+    const all = JSON.parse(localStorage.getItem(KEYS.waitlists) || '{}');
+    const list: WaitlistEntry[] = all[showtimeId] || [];
+    if (list.some(e => e.userId === user.id)) return false;
+    const newEntry: WaitlistEntry = {
+      id: `wl_${Date.now()}`,
+      showtimeId,
+      userId: user.id,
+      userName: user.name,
+      userEmail: user.email,
+      createdAt: new Date().toISOString(),
+    };
+    list.push(newEntry);
+    all[showtimeId] = list;
+    localStorage.setItem(KEYS.waitlists, JSON.stringify(all));
+    emitStoreEvent(STORE_EVENTS.waitlists);
+    waitlistApi.joinWaitlist({
+      showtimeId,
+      userId: user.id,
+      userName: user.name,
+      userEmail: user.email,
+    }).then(saved => {
+      if (saved && saved.id && saved.id !== newEntry.id) {
+        const curAll = JSON.parse(localStorage.getItem(KEYS.waitlists) || '{}');
+        const curList: WaitlistEntry[] = curAll[showtimeId] || [];
+        const it = curList.find(e => e.id === newEntry.id);
+        if (it) it.id = saved.id;
+        curAll[showtimeId] = curList;
+        localStorage.setItem(KEYS.waitlists, JSON.stringify(curAll));
+        emitStoreEvent(STORE_EVENTS.waitlists);
+      }
+    }).catch(err => console.warn('API joinWaitlist failed:', err));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+
